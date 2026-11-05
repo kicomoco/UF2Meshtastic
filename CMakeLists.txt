@@ -53,6 +53,10 @@ add_executable(picocalc_meshtastic
     src/ui/scr_stats.c
     src/ui/scr_log.c
     src/ui/scr_help.c
+    src/net/wifi.c
+    src/net/http.c
+    src/map/png.c
+    src/map/tiles.c
     third_party/fatfs/ff.c
     third_party/fatfs/ffunicode.c
     third_party/nanopb/pb_common.c
@@ -64,6 +68,7 @@ add_executable(picocalc_meshtastic
 target_include_directories(picocalc_meshtastic PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/src
     ${CMAKE_CURRENT_LIST_DIR}/src/proto
+    ${CMAKE_CURRENT_LIST_DIR}/src/net
     ${CMAKE_CURRENT_LIST_DIR}/third_party/fatfs
     ${CMAKE_CURRENT_LIST_DIR}/third_party/nanopb
 )
@@ -72,7 +77,8 @@ target_compile_definitions(picocalc_meshtastic PRIVATE
     APP_VERSION="${APP_VERSION}"
     PB_FIELD_32BIT=1
     PICO_STDIO_USB_CONNECT_WAIT_TIMEOUT_MS=0
-    CYW43_LWIP=0
+    CYW43_HOST_NAME="picocalc-mesh"
+    PICO_MALLOC_PANIC=0
 )
 
 target_compile_options(picocalc_meshtastic PRIVATE -Wall -Wno-unused-function -Wno-format-truncation)
@@ -91,7 +97,9 @@ target_link_libraries(picocalc_meshtastic
     hardware_i2c
     hardware_dma
     hardware_pwm
-    pico_cyw43_arch_poll
+    pico_cyw43_arch_lwip_poll
+    pico_lwip_mbedtls
+    pico_mbedtls
     pico_btstack_base
     pico_btstack_ble
     pico_btstack_run_loop_async_context

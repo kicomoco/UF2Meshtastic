@@ -19,6 +19,11 @@ typedef struct {
     uint8_t lcd_backlight;
     uint8_t kbd_backlight;
     int16_t tz_minutes;
+    // v2: Wi-Fi and map tiles
+    bool wifi_enabled;
+    uint8_t map_source; // 0 = off, otherwise tile source index + 1 (see map/tiles.h)
+    char wifi_ssid[33];
+    char wifi_pass[65];
 } app_settings_t;
 
 extern app_settings_t g_settings;
@@ -27,6 +32,11 @@ bool storage_init(void);
 bool storage_available(void);
 
 void settings_save(void);
+
+// Creates every directory along `path` (which must not end in a file name).
+void storage_mkdirs(const char *path);
+// Deletes a directory tree. Returns the number of files removed.
+int storage_rmtree(const char *path);
 
 // BTstack TLV backed by RAM + SD file
 const btstack_tlv_t *storage_tlv_instance(void);

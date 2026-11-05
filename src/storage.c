@@ -1,6 +1,7 @@
 // SD card persistence. All files live in /meshtastic on the card.
 #include "storage.h"
 
+#include <stddef.h>
 #include <string.h>
 #include <stdio.h>
 #include "ff.h"
@@ -12,7 +13,11 @@
 #define NODES_PATH DIR_PATH "/nodes.bin"
 
 #define SETTINGS_MAGIC 0x4D534354u // "MSCT"
-#define SETTINGS_VERSION 1
+#define SETTINGS_VERSION 2
+// The v1 record is a prefix of the current one (rounded up to the struct's 4-byte alignment).
+#define SETTINGS_V1_FIELDS offsetof(app_settings_t, wifi_enabled)
+#define SETTINGS_V1_SIZE ((SETTINGS_V1_FIELDS + 3) & ~3u)
+_Static_assert(SETTINGS_V1_SIZE == 56, "v1 settings.bin was 56 bytes");
 #define NODES_MAGIC 0x4E4F4445u // "NODE"
 #define NODES_VERSION 1
 
@@ -29,6 +34,7 @@ static void settings_defaults(void) {
     g_settings.sound = true;
     g_settings.lcd_backlight = 200;
     g_settings.kbd_backlight = 0;
+    g_settings.map_source = 1;
 }
 
 static bool read_file(const char *path, void *buf, UINT len, UINT *got) {
@@ -136,9 +142,16 @@ bool storage_init(void) {
 
     app_settings_t s;
     UINT got = 0;
-    if (read_file(SETTINGS_PATH, &s, sizeof(s), &got) && got == sizeof(s) && s.magic == SETTINGS_MAGIC &&
-        s.version == SETTINGS_VERSION) {
-        g_settings = s;
+    if (read_file(SETTINGS_PATH, &s, sizeof(s), &got) && got >= SETTINGS_V1_SIZE && s.magic == SETTINGS_MAGIC) {
+        if (s.version == SETTINGS_VERSION && got == sizeof(s)) {
+            g_settings = s;
+        } else if (s.version == 1 && got == SETTINGS_V1_SIZE) {
+            // Keep the v1 fields; the new ones keep their defaults.
+            memcpy(&g_settings, &s, SETTINGS_V1_FIELDS);
+            g_settings.version = SETTINGS_VERSION;
+        }
+        g_settings.wifi_ssid[sizeof(g_settings.wifi_ssid) - 1] = 0;
+        g_settings.wifi_pass[sizeof(g_settings.wifi_pass) - 1] = 0;
     }
 
     if (!read_file(TLV_PATH, tlv_entries, sizeof(tlv_entries), &got) || got != sizeof(tlv_entries)) {
@@ -150,6 +163,48 @@ bool storage_init(void) {
 bool storage_available(void) { return mounted; }
 
 void settings_save(void) { write_file(SETTINGS_PATH, &g_settings, sizeof(g_settings)); }
+
+void storage_mkdirs(const char *path) {
+    if (!mounted) return;
+    char buf[96];
+    snprintf(buf, sizeof(buf), "%s", path);
+    for (char *p = buf + 1;; p++) {
+        if (*p == '/' || *p == 0) {
+            char c = *p;
+            *p = 0;
+            f_mkdir(buf);
+            if (!c) break;
+            *p = c;
+        }
+    }
+}
+
+static int rmtree_depth(char *path, size_t cap, int depth) {
+    if (depth > 6) return 0;
+    DIR d;
+    static FILINFO fi;
+    int removed = 0;
+    if (f_opendir(&d, path) != FR_OK) return 0;
+    size_t base = strlen(path);
+    while (f_readdir(&d, &fi) == FR_OK && fi.fname[0]) {
+        bool is_dir = fi.fattrib & AM_DIR;
+        snprintf(path + base, cap - base, "/%s", fi.fname);
+        if (is_dir) removed += rmtree_depth(path, cap, depth + 1);
+        if (f_unlink(path) == FR_OK && !is_dir) removed++;
+        path[base] = 0;
+    }
+    f_closedir(&d);
+    return removed;
+}
+
+int storage_rmtree(const char *path) {
+    if (!mounted) return 0;
+    char buf[128];
+    snprintf(buf, sizeof(buf), "%s", path);
+    int n = rmtree_depth(buf, sizeof(buf), 0);
+    f_unlink(path);
+    return n;
+}
 
 // ---------------------------------------------------------------- messages
 

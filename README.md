@@ -13,7 +13,7 @@ Tested on a PicoCalc (Pico 2 W, uf2loader) with a Heltec V3 running Meshtastic f
 
 Once paired, the bond is stored on the SD card, and the app reconnects automatically on later launches unless you turn auto-connect off with **A**.
 
-The app keeps its data in `/meshtastic/` on the SD card: `settings.bin`, `nodes.bin`, `messages.bin` and `bt_keys.bin`. Delete that folder to reset the app. The app never writes to the Pico's flash.
+The app keeps its data in `/meshtastic/` on the SD card: `settings.bin`, `nodes.bin`, `messages.bin`, `bt_keys.bin` and the map tile cache in `tiles/`. Delete that folder to reset the app. The app never writes to the Pico's flash.
 
 ## Tabs and keys
 
@@ -23,16 +23,42 @@ The tabs follow the Android app:
 |-----|-----|--------------|
 | F1 | Chat | Lists conversations (channels and DMs) with unread counts. Enter opens one; type and press Enter to send. Up/Down/PgUp/PgDn scroll and Esc goes back. Each message shows its delivery status (Sent / Acknowledged / Delivered / Failed). |
 | F2 | Node | Node list (you, then favourites, then most recently heard). Type to filter. Enter shows details and actions: DM, traceroute, request position, exchange user info, favourite, remove. |
-| F3 | Map | Plots nodes relative to each other (no map tiles). Arrows pan, `+`/`-` zoom, Tab selects a node, `c` centres, `f` fits all nodes, Enter opens the node. |
+| F3 | Map | Plots nodes on a Web Mercator map, over downloaded map tiles when enabled (see [Wi-Fi and map tiles](#wi-fi-and-map-tiles)). Arrows pan, `+`/`-` zoom, Tab selects a node, `c` centres, `f` fits all nodes, Enter opens the node. |
 | F4 | Chan | Channels and LoRa summary. `U` shows the channel share URL (also printed on USB serial). |
 | F5 | Conn | Bluetooth: `S` starts/stops a scan, Enter connects, `D` disconnects, `A` toggles auto-connect, `O` shows non-Meshtastic devices, `X` forgets all pairings. |
-| F6 | Set | Radio settings (owner name, role, region, modem preset, hop limit, reboot) and app settings (sound, units, backlights, timezone, clear history). |
+| F6 | Set | Radio settings (owner name, role, region, modem preset, hop limit, reboot), app settings (sound, units, backlights, timezone, clear history) and Wi-Fi & map settings. |
 | F7 | Stat | Your node's telemetry: battery, channel utilisation, air time, uptime. |
 | F8 | Log | Debug log. Up/Down/PgUp/PgDn/Home/End scroll it. |
 | F9 | Help | Key reference. |
 | F10 | Info | About the app and the connected radio. |
 
 **Ctrl+Left** and **Ctrl+Right** move to the previous or next tab.
+
+## Wi-Fi and map tiles
+
+The Pico 2 W's Wi-Fi is used only to download map tiles; the radio link is always Bluetooth.
+
+1. Press **F6 (Set)** and scroll to **Wi-Fi & map**.
+2. Turn **Wi-Fi** on, then select **Network**. The app scans; pick your network (or **Other...** for a hidden one) and type the password.
+3. **Status** shows the connection and signal; press Enter on it to reconnect. The status bar shows a Wi-Fi icon while Wi-Fi is on.
+4. **Map tiles** chooses the background for the Map tab:
+
+| Source | Notes |
+|--------|-------|
+| OpenStreetMap | Default. |
+| OpenStreetMap Dark | OpenStreetMap tiles recoloured on the device for a dark theme. Shares the OpenStreetMap cache. |
+| OpenTopoMap | Terrain and contours, up to zoom 17. |
+| Humanitarian | OSM France's Humanitarian style. |
+| Off (plain map) | No tiles, as in earlier versions. |
+
+Tiles are fetched over HTTPS and cached on the SD card in `/meshtastic/tiles/`, so areas you have viewed still work without Wi-Fi. Areas not in the cache show "Map tiles need Wi-Fi". **Clear map tile cache** deletes the cache.
+
+Notes:
+
+- Please respect the tile servers' usage policies (for example the [OSM tile usage policy](https://operations.osmfoundation.org/policies/tiles/)). The app sends an identifying User-Agent, downloads only what's on screen, and caches everything it fetches. Don't use it for bulk downloading.
+- The Wi-Fi password is stored unencrypted in `/meshtastic/settings.bin` on the SD card.
+- TLS server certificates are not verified (the app has no CA store). Tiles are public data, but a network attacker could substitute images.
+- To free RAM for Wi-Fi and TLS, the message history kept in memory is limited to the latest 200 messages.
 
 ## Building
 
@@ -64,6 +90,8 @@ Every push to `main` triggers [.github/workflows/release.yml](.github/workflows/
 - `src/mesh/mesh.c`: Meshtastic protocol handling, node DB, messages and admin.
 - `src/ui/`: framebuffer graphics, widgets and the screens.
 - `src/bt_glue.c`: CYW43 + BTstack setup, with the pairing database on the SD card instead of flash.
+- `src/net/`: Wi-Fi connection manager, lwIP/mbedTLS configuration and a small HTTP(S) client.
+- `src/map/`: map tile sources, SD cache, the on-screen tile renderer and a streaming PNG decoder.
 - `src/proto/`: generated nanopb sources (`tools/gen_protos.sh`).
 
 ## Debugging over USB
@@ -80,6 +108,7 @@ While the app runs, the Pico's USB port is a serial console (115200 baud). It pr
 | `P` | Dump the framebuffer as hex (`FB-BEGIN` ... `FB-END`) |
 | `R` | Force a full screen refresh |
 | `T` | LCD write/readback stress test |
+| `M` | Heap usage |
 
 To flash a new build without the SD card, send `B`, then run `picotool load -x build/picocalc_meshtastic.uf2`. This writes into the loader's app slot and starts the app. Avoid `picotool -f`, which resets the Pico at an arbitrary moment. If it interrupts a keyboard transfer, the PicoCalc's keyboard controller can hang until the next power cycle.
 
@@ -104,8 +133,8 @@ The keyboard controller is an STM32F103, flashed through the PicoCalc's own USB-
 
 ## Limitations
 
-- No map tiles; the map is a relative plot only.
+- Map tiles need Wi-Fi to download (cached tiles work offline). Interlaced PNGs and tiles wider than 256 px are not supported.
 - Keyboard input is ASCII only, but received UTF-8 is shown using a Latin-1 font.
-- One radio connection at a time. Bluetooth LE only (no Wi-Fi/TCP or serial).
+- One radio connection at a time. The radio is reached over Bluetooth LE only (no Wi-Fi/TCP or serial connection to the radio).
 - The PicoCalc's factory keyboard firmware has no keyboard-backlight control and doesn't report the battery level. The app detects this: the keyboard-backlight setting shows "n/a" and the battery indicator is hidden. Screen brightness works on all firmware versions. To get both features, update the keyboard firmware (see below).
 - Some advanced config sections (modules, MQTT, security keys) aren't editable.

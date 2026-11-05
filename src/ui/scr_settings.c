@@ -7,6 +7,8 @@
 #include "mesh/mesh.h"
 #include "storage.h"
 #include "hw/keyboard.h"
+#include "map/tiles.h"
+#include "net/wifi.h"
 
 // The keyboard controller treats values above 240 as "off" for the keyboard light.
 #define BL_MAX 240
@@ -28,6 +30,13 @@ enum {
     S_KBD_BL,
     S_TZ,
     S_CLEAR,
+    S_HDR_NET,
+    S_WIFI,
+    S_WIFI_NET,
+    S_WIFI_STATUS,
+    S_WIFI_IP,
+    S_MAP_SRC,
+    S_MAP_CLEAR,
     S_COUNT
 };
 
@@ -37,7 +46,9 @@ static listnav_t nav = {.sel = S_LONG};
 static const char *opt_ptrs[40];
 static char opt_buf[40][16];
 
-static bool is_header(int i) { return i == S_HDR_RADIO || i == S_HDR_APP; }
+static bool is_header(int i) { return i == S_HDR_RADIO || i == S_HDR_APP || i == S_HDR_NET; }
+
+static bool scan_pending; // show the network picker when the scan finishes
 
 static bool need_radio(void) {
     if (g_mesh.link_up && g_mesh.config_complete) return true;
@@ -107,6 +118,32 @@ static void label_value(int i, char *label, char *val, size_t n) {
         break;
     }
     case S_CLEAR: snprintf(label, n, "Clear message history"); break;
+    case S_HDR_NET: snprintf(label, n, "Wi-Fi & map"); break;
+    case S_WIFI:
+        snprintf(label, n, "Wi-Fi");
+        snprintf(val, n, "%s", g_settings.wifi_enabled ? "On" : "Off");
+        break;
+    case S_WIFI_NET:
+        snprintf(label, n, "Network");
+        if (scan_pending) snprintf(val, n, "Scanning...");
+        else snprintf(val, n, "%.24s", g_settings.wifi_ssid[0] ? g_settings.wifi_ssid : "Choose...");
+        break;
+    case S_WIFI_STATUS:
+        snprintf(label, n, "Status");
+        if (wifi_state() == WIFI_CONNECTED) snprintf(val, n, "%s %ddBm", wifi_status_text(), wifi_rssi());
+        else snprintf(val, n, "%s", wifi_status_text());
+        break;
+    case S_WIFI_IP:
+        snprintf(label, n, "IP address");
+        snprintf(val, n, "%s", wifi_ip_text());
+        break;
+    case S_MAP_SRC: {
+        snprintf(label, n, "Map tiles");
+        const tile_source_t *src = tiles_active_source();
+        snprintf(val, n, "%s", src ? src->name : "Off");
+        break;
+    }
+    case S_MAP_CLEAR: snprintf(label, n, "Clear map tile cache"); break;
     }
 }
 
@@ -187,6 +224,67 @@ static void cb_clear(void) {
     ui_toast("Message history cleared");
 }
 
+// --- Wi-Fi ---
+
+static char new_ssid[33];
+
+static void wifi_save(const char *ssid, const char *pass) {
+    snprintf(g_settings.wifi_ssid, sizeof(g_settings.wifi_ssid), "%s", ssid);
+    snprintf(g_settings.wifi_pass, sizeof(g_settings.wifi_pass), "%s", pass);
+    g_settings.wifi_enabled = true;
+    settings_save();
+    wifi_apply_settings();
+    ui_toast("Connecting to %s", ssid);
+}
+
+static void cb_wifi_pass(const char *t) { wifi_save(new_ssid, t); }
+
+static void ask_password(void) {
+    bool same = strcmp(new_ssid, g_settings.wifi_ssid) == 0;
+    ui_prompt("Wi-Fi password", same ? g_settings.wifi_pass : "", 64, cb_wifi_pass);
+}
+
+static void cb_wifi_ssid(const char *t) {
+    if (!t[0]) return;
+    snprintf(new_ssid, sizeof(new_ssid), "%s", t);
+    ask_password();
+}
+
+static void cb_wifi_pick(int c) {
+    const wifi_ap_t *ap = wifi_scan_result(c);
+    if (!ap) {
+        ui_prompt("Network name (SSID)", "", 32, cb_wifi_ssid);
+        return;
+    }
+    snprintf(new_ssid, sizeof(new_ssid), "%s", ap->ssid);
+    if (ap->secure) ask_password();
+    else wifi_save(new_ssid, "");
+}
+
+static void show_networks(void) {
+    int n = wifi_scan_count();
+    if (n > 39) n = 39;
+    int sel = 0;
+    for (int i = 0; i < n; i++) {
+        const wifi_ap_t *ap = wifi_scan_result(i);
+        snprintf(opt_buf[i], sizeof(opt_buf[i]), "%s", ap->ssid);
+        opt_ptrs[i] = opt_buf[i];
+        if (strcmp(ap->ssid, g_settings.wifi_ssid) == 0) sel = i;
+    }
+    opt_ptrs[n] = "Other...";
+    ui_pick(n ? "Wi-Fi network" : "No networks found", opt_ptrs, n + 1, sel, cb_wifi_pick);
+}
+
+static void cb_map_src(int c) {
+    g_settings.map_source = (uint8_t)c;
+    settings_save();
+}
+
+static void cb_map_clear(void) {
+    int n = tiles_clear_cache();
+    ui_toast("Deleted %d cached tiles", n);
+}
+
 static void pick_names(const char *title, const char *(*namefn)(int), int count, int sel, ui_pick_cb cb) {
     for (int i = 0; i < count && i < 40; i++) {
         snprintf(opt_buf[i], sizeof(opt_buf[i]), "%s", namefn(i));
@@ -263,12 +361,46 @@ static void activate(int i) {
     case S_CLEAR:
         ui_confirm("Clear history", "Delete all stored messages on this PicoCalc?", cb_clear);
         break;
+    case S_WIFI:
+        g_settings.wifi_enabled = !g_settings.wifi_enabled;
+        settings_save();
+        wifi_apply_settings();
+        break;
+    case S_WIFI_NET:
+        if (wifi_scan_start()) scan_pending = true;
+        else ui_toast("Wi-Fi scan failed");
+        break;
+    case S_WIFI_STATUS:
+        if (!g_settings.wifi_enabled) ui_toast("Wi-Fi is off");
+        else if (!g_settings.wifi_ssid[0]) ui_toast("Choose a network first");
+        else wifi_apply_settings();
+        break;
+    case S_MAP_SRC: {
+        static const char *srcs[8];
+        int n = tiles_source_count();
+        srcs[0] = "Off (plain map)";
+        for (int k = 0; k < n && k < 7; k++) srcs[k + 1] = tiles_source(k)->name;
+        ui_pick("Map tiles", srcs, n + 1, g_settings.map_source, cb_map_src);
+        break;
+    }
+    case S_MAP_CLEAR:
+        ui_confirm("Clear map cache", "Delete all downloaded map tiles from the SD card?", cb_map_clear);
+        break;
     }
 }
 
+static int visible_rows(void) {
+    // The last row is taken by the "needs a radio" note when disconnected.
+    return CONTENT_H / ROW_H - (g_mesh.link_up && g_mesh.config_complete ? 0 : 1);
+}
+
 static void draw(void) {
+    if (scan_pending && !wifi_scan_active()) {
+        scan_pending = false;
+        if (!ui_modal_active()) show_networks();
+    }
     nav.count = S_COUNT;
-    int visible = CONTENT_H / ROW_H;
+    int visible = visible_rows();
     list_clamp(&nav, visible);
     char label[48], val[48];
     for (int r = 0; r < visible && nav.top + r < S_COUNT; r++) {
@@ -294,12 +426,12 @@ static void draw(void) {
 static bool key(const key_event_t *ev) {
     nav.count = S_COUNT;
     int old = nav.sel;
-    if (list_key(&nav, ev, CONTENT_H / ROW_H)) {
+    if (list_key(&nav, ev, visible_rows())) {
         // skip headers
         if (is_header(nav.sel)) {
             nav.sel += nav.sel >= old ? 1 : -1;
             if (nav.sel < 0) nav.sel = S_LONG;
-            list_clamp(&nav, CONTENT_H / ROW_H);
+            list_clamp(&nav, visible_rows());
         }
         return true;
     }
