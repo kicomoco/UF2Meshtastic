@@ -1,5 +1,7 @@
 // Meshtastic client for the ClockworkPi PicoCalc (Raspberry Pi Pico 2 W).
 #include <stdio.h>
+#include <malloc.h>
+#include <unistd.h>
 #include <string.h>
 
 #include "pico/stdlib.h"
@@ -15,6 +17,9 @@
 #include "mesh/mesh.h"
 #include "mesh/ble_link.h"
 #include "ui/ui.h"
+#include "net/wifi.h"
+#include "net/http.h"
+#include "map/tiles.h"
 
 // Debug aid: sending 'P' over USB serial dumps the framebuffer as hex rows.
 static void usb_commands(void) {
@@ -84,6 +89,13 @@ static void usb_commands(void) {
         // Inject the next character as a key press ('\r' = Enter).
         int k = getchar_timeout_us(100000);
         if (k >= 0) kbd_inject(k == '\r' || k == '\n' ? KEY_ENTER : (uint8_t)k);
+    } else if (c == 'M') {
+        extern char __StackLimit, end;
+        struct mallinfo mi = mallinfo();
+        char *brk = sbrk(0);
+        printf("HEAP: used=%d free_in_arena=%d arena=%d unclaimed=%ld\n", mi.uordblks, mi.fordblks, mi.arena,
+               (long)(&__StackLimit - brk));
+        (void)end;
     } else if (c == 'R') {
         lcd_invalidate();
         lcd_flush();
@@ -114,12 +126,15 @@ int main(void) {
     app_log("Mesh state loaded");
 
     splash("Starting Bluetooth...");
+    bool radio_ok = false;
     if (cyw43_arch_init()) {
         app_log("CYW43 init failed");
         splash("Wireless chip init failed");
     } else {
         app_log("CYW43 ready, starting BLE");
         ble_link_init();
+        wifi_init();
+        radio_ok = true;
     }
 
     ui_init();
@@ -157,6 +172,11 @@ int main(void) {
         ble_link_poll();
         mesh_poll();
         sound_poll();
+        if (radio_ok) {
+            wifi_poll();
+            http_poll();
+            if (ui_current_tab() == TAB_MAP && !ui_modal_active()) tiles_poll();
+        }
         if (ui_render()) lcd_flush();
         else cyw43_arch_wait_for_work_until(make_timeout_time_ms(2));
     }

@@ -10,7 +10,7 @@
 #include "meshtastic/channel.pb.h"
 
 #define MAX_NODES 200
-#define MAX_MSGS 300
+#define MAX_MSGS 200
 #define MAX_CHANNELS 8
 #define MAX_TEXT_BYTES 200
 #define NODENUM_BROADCAST 0xFFFFFFFFu

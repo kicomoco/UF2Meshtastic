@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#define LOG_LINES 160
+#define LOG_LINES 120
 #define LOG_LINE_LEN 80
 
 void app_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));

@@ -11,6 +11,8 @@
 #include "hw/sound.h"
 #include "storage.h"
 #include "log.h"
+#include "map/tiles.h"
+#include "net/wifi.h"
 
 static const screen_t *const screens[TAB_COUNT] = {
     &scr_messages, &scr_nodes, &scr_map, &scr_channels, &scr_connect,
@@ -21,7 +23,7 @@ static int cur_tab;
 static bool dirty = true;
 static uint32_t last_render_ms;
 static uint32_t last_second;
-static uint32_t seen_change, seen_log;
+static uint32_t seen_change, seen_log, seen_wifi, seen_tiles;
 static int seen_state = -1, seen_scan = -1;
 static bool seen_passkey;
 
@@ -279,6 +281,20 @@ static void draw_bt_icon(int x, int y, uint16_t c) {
     gfx_line(x + 6, y + 8, x, y + 3, c);
 }
 
+static void draw_wifi_icon(int x, int y, int bars, uint16_t c, uint16_t off) {
+    // Three arcs over a dot, 11x10
+    gfx_fill(x + 4, y + 8, 3, 2, bars > 0 ? c : off);
+    for (int i = 0; i < 3; i++) {
+        int r = 3 + i * 2;
+        uint16_t col = bars > i + 1 ? c : off;
+        int cx = x + 5, cy = y + 9;
+        for (int dx = -r; dx <= r; dx++) {
+            int dy = r - (dx < 0 ? -dx : dx) / 2 - (dx * dx > r * r / 2 ? 1 : 0);
+            gfx_pixel(cx + dx, cy - dy, col);
+        }
+    }
+}
+
 static void draw_status_bar(void) {
     gfx_fill(0, 0, LCD_W, STATUS_H, C_BAR);
     const screen_t *s = screens[cur_tab];
@@ -319,6 +335,22 @@ static void draw_status_bar(void) {
     rx -= 9;
     draw_bt_icon(rx, 2, bc);
     rx -= 4;
+
+    if (g_settings.wifi_enabled) {
+        wifi_state_t ws = wifi_state();
+        int bars = 0;
+        uint16_t wc = C_YELLOW;
+        if (ws == WIFI_CONNECTED) {
+            int rssi = wifi_rssi();
+            bars = rssi > -60 ? 4 : rssi > -70 ? 3 : rssi > -80 ? 2 : 1;
+            wc = C_ACCENT;
+        } else if (ws == WIFI_FAILED || ws == WIFI_NO_NETWORK) {
+            wc = C_RED;
+        }
+        rx -= 12;
+        draw_wifi_icon(rx, 3, bars, wc, ws == WIFI_CONNECTED ? C_FAINT : wc);
+        rx -= 4;
+    }
 
     gfx_text_fit(4, 0, title, rx - 6, FONT_BIG, C_TEXT, TRANSPARENT);
 }
@@ -398,6 +430,14 @@ bool ui_render(void) {
     if ((int)ble_link_state() != seen_state || ble_link_scan_count() != seen_scan) {
         seen_state = (int)ble_link_state();
         seen_scan = ble_link_scan_count();
+        dirty = true;
+    }
+    if (wifi_change_counter() != seen_wifi) {
+        seen_wifi = wifi_change_counter();
+        dirty = true;
+    }
+    if (cur_tab == TAB_MAP && tiles_change_counter() != seen_tiles) {
+        seen_tiles = tiles_change_counter();
         dirty = true;
     }
     if (cur_tab == TAB_LOG && app_log_serial() != seen_log) {
