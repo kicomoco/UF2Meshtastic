@@ -6,7 +6,7 @@ Tested on a PicoCalc (Pico 2 W, uf2loader) with a Heltec V3 running Meshtastic f
 
 ## Install
 
-1. Copy `build/picocalc_meshtastic.uf2` to the `pico2-apps/` folder on the PicoCalc SD card.
+1. Download `picocalc_meshtastic.uf2` from the latest [GitHub release](../../releases/latest), or build it yourself. Copy it to the `pico2-apps/` folder on the PicoCalc SD card.
 2. Start the PicoCalc and choose **picocalc_meshtastic** in the loader.
 3. Press **F5 (Conn)** and then **S** to scan. Select your radio and press **Enter**.
 4. When the PIN prompt appears, type the PIN shown on the radio's screen. If the radio uses a fixed PIN, the default is `123456`. Press **Enter**.
@@ -47,6 +47,15 @@ make -C build -j8
 ```
 
 The build produces `build/picocalc_meshtastic.uf2`.
+
+### Releases
+
+Every push to `main` triggers [.github/workflows/release.yml](.github/workflows/release.yml), which builds the app and publishes a GitHub release with the `.uf2` attached:
+
+- Each release increments the patch number of the last `vX.Y.Z` tag, e.g. v1.0.4 → v1.0.5. The version is compiled into the app and shown on the About tab.
+- To bump the major or minor version, raise the base `APP_VERSION` in `CMakeLists.txt` (e.g. to `1.1.0`). The next release uses it, and later releases continue from there.
+- Pushes that only change Markdown files or `.gitignore` don't create a release.
+- A release can also be triggered by hand from the repository's **Actions** tab.
 
 ### Layout
 

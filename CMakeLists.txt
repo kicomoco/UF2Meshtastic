@@ -20,7 +20,10 @@ set(CMAKE_CXX_STANDARD 17)
 
 pico_sdk_init()
 
-set(APP_VERSION "1.0.0")
+# Base version; CI passes -DAPP_VERSION=x.y.z when building a release.
+if(NOT DEFINED APP_VERSION)
+    set(APP_VERSION "1.0.0")
+endif()
 
 file(GLOB PROTO_SOURCES ${CMAKE_CURRENT_LIST_DIR}/src/proto/meshtastic/*.pb.c)
 

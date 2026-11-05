@@ -1,0 +1,88 @@
+name: Build and release
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# One release at a time so two quick pushes can't claim the same version.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  TC_VER: 14.2.rel1
+  PICO_SDK_VER: 2.2.0
+
+jobs:
+  build-release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # tags are needed to work out the next version
+
+      - name: Work out next version
+        id: ver
+        run: |
+          # Base version from CMakeLists.txt; raise it there to bump major/minor.
+          base=$(sed -n 's/^ *set(APP_VERSION "\([0-9.]*\)")/\1/p' CMakeLists.txt)
+          last=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1 | sed 's/^v//')
+          if [ -z "$last" ]; then
+            next=$base
+          else
+            IFS=. read -r ma mi pa <<< "$last"
+            next="$ma.$mi.$((pa + 1))"
+            # If the base version was raised past the last release, use it instead.
+            if [ "$(printf '%s\n%s\n' "$next" "$base" | sort -V | tail -n1)" = "$base" ] && [ "$base" != "$next" ]; then
+              next=$base
+            fi
+          fi
+          echo "last=${last:-none} base=$base next=$next"
+          echo "version=$next" >> "$GITHUB_OUTPUT"
+
+      - name: Install build tools
+        run: sudo apt-get update -q && sudo apt-get install -y -q cmake ninja-build python3 build-essential
+
+      - name: Cache toolchain and pico-sdk
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/arm-gnu-toolchain
+            ~/pico-sdk
+          key: deps-${{ runner.os }}-${{ env.TC_VER }}-${{ env.PICO_SDK_VER }}
+
+      - name: Fetch toolchain and pico-sdk
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          curl -sSL -o tc.tar.xz "https://developer.arm.com/-/media/Files/downloads/gnu/$TC_VER/binrel/arm-gnu-toolchain-$TC_VER-x86_64-arm-none-eabi.tar.xz"
+          mkdir -p ~/arm-gnu-toolchain
+          tar xf tc.tar.xz -C ~/arm-gnu-toolchain --strip-components=1
+          git clone --depth 1 -b "$PICO_SDK_VER" --recurse-submodules --shallow-submodules \
+            https://github.com/raspberrypi/pico-sdk.git ~/pico-sdk
+
+      - name: Build
+        run: |
+          export PICO_TOOLCHAIN_PATH=$HOME/arm-gnu-toolchain
+          export PATH=$PICO_TOOLCHAIN_PATH/bin:$PATH
+          export PICO_SDK_PATH=$HOME/pico-sdk
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DAPP_VERSION=${{ steps.ver.outputs.version }}
+          cmake --build build
+          ls -l build/picocalc_meshtastic.uf2
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          gh release create "v$VERSION" build/picocalc_meshtastic.uf2 \
+            --target "$GITHUB_SHA" \
+            --title "v$VERSION" \
+            --generate-notes
